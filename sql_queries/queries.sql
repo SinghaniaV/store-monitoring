@@ -1,12 +1,34 @@
-SELECT s.*, mh.day, mh.start_time_local, mh.end_time_local, tz.timezone_str
-FROM store_status AS s LEFT JOIN menu_hours AS mh ON s.store_id = mh.store_id
-    LEFT JOIN time_zone AS tz ON mh.store_id = tz.store_id;
-
+WITH menu_hours AS (
+    SELECT
+        bh.store_id,
+        bh.dayOfWeek,
+        time_zones.timezone_str,
+        bh.start_time_local,
+        bh.end_time_local,
+        datetime('now', '+' || (strftime('%s', bh.start_time_local) - strftime('%s', 'now')) || ' seconds', time_zones.timezone_str || ' hours') AS start_time_utc,
+        datetime('now', '+' || (strftime('%s', bh.end_time_local) - strftime('%s', 'now')) || ' seconds', time_zones.timezone_str || ' hours') AS end_time_utc
+    FROM
+        business_hours bh
+    LEFT JOIN
+        time_zones ON bh.store_id = time_zones.store_id
+),
+StatusLastHour AS (
+    SELECT
+        store_id,
+        timestamp_utc,
+        status,
+        LEAD(status) OVER (PARTITION BY store_id ORDER BY timestamp_utc) AS next_status,
+        strftime('%s', LEAD(timestamp_utc) OVER (PARTITION BY store_id ORDER BY timestamp_utc)) - strftime('%s', timestamp_utc) AS interval_seconds
+    FROM
+        store_status
+    WHERE
+        timestamp_utc > datetime('now', '-1 hour')
+)
 SELECT
-    s.store_id, mh.day, mh.end_time_local, mh.start_time_local
+    store_id,
+    SUM(CASE WHEN status = 'active' THEN interval_seconds ELSE 0 END) / 60.0 AS uptime_last_hour,
+    SUM(CASE WHEN status = 'inactive' THEN interval_seconds ELSE 0 END) / 60.0 AS downtime_last_hour
 FROM
-    store_status AS s
-LEFT JOIN menu_hours AS mh ON s.store_id = mh.store_id
-LEFT JOIN time_zone AS tz ON mh.store_id = tz.store_id
+    StatusLastHour
 GROUP BY
-    store_id, mh.day, mh.end_time_local, mh.start_time_local;
+    store_id;
